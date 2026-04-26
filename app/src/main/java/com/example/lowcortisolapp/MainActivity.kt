@@ -15,9 +15,11 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -25,15 +27,20 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -61,9 +68,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import com.example.lowcortisolapp.ui.theme.LowCortisolAppTheme
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.collect
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.roundToInt
@@ -137,6 +145,7 @@ fun TimerScreen(
     var rollbackDurationMillis by rememberSaveable {
         mutableLongStateOf(toMillis(rollbackMinutes, rollbackSeconds))
     }
+    var loopRest by rememberSaveable { mutableStateOf(prefs.getBoolean("loopRest", false)) }
     var elapsedMillis by rememberSaveable { mutableLongStateOf(0L) }
     var rollbackElapsedMillis by rememberSaveable { mutableLongStateOf(0L) }
     var phase by rememberSaveable { mutableStateOf(TimerPhase.Idle) }
@@ -180,6 +189,10 @@ fun TimerScreen(
         }
     }
 
+    LaunchedEffect(loopRest) {
+        prefs.edit().putBoolean("loopRest", loopRest).apply()
+    }
+
     LaunchedEffect(phase, durationMillis) {
         if (phase != TimerPhase.Running) return@LaunchedEffect
 
@@ -199,7 +212,7 @@ fun TimerScreen(
         }
     }
 
-    LaunchedEffect(phase, rollbackDurationMillis) {
+    LaunchedEffect(phase, rollbackDurationMillis, loopRest) {
         if (phase != TimerPhase.Alarm) return@LaunchedEffect
 
         rollbackStartedAt = SystemClock.elapsedRealtime()
@@ -213,9 +226,10 @@ fun TimerScreen(
         }
 
         if (rollbackElapsedMillis >= rollbackDurationMillis) {
-            phase = TimerPhase.Idle
             elapsedMillis = 0L
             rollbackElapsedMillis = 0L
+            rollbackElapsedBeforeRun = 0L
+            phase = if (loopRest) TimerPhase.Running else TimerPhase.Idle
         }
     }
 
@@ -258,7 +272,9 @@ fun TimerScreen(
             ThemeButton(
                 darkTheme = darkTheme,
                 onClick = onToggleTheme,
-                modifier = Modifier.align(Alignment.TopEnd)
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .zIndex(1f)
             )
 
             if (phase == TimerPhase.Idle) {
@@ -267,11 +283,13 @@ fun TimerScreen(
                     timerSeconds = timerSeconds,
                     rollbackMinutes = rollbackMinutes,
                     rollbackSeconds = rollbackSeconds,
+                    loopRest = loopRest,
                     hasAudio = audioUriText != null,
                     onTimerMinutesChange = { timerMinutes = it },
                     onTimerSecondsChange = { timerSeconds = it },
                     onRollbackMinutesChange = { rollbackMinutes = it },
                     onRollbackSecondsChange = { rollbackSeconds = it },
+                    onLoopRestChange = { loopRest = it },
                     onPickAudio = { audioPicker.launch(arrayOf("audio/mpeg", "audio/*")) },
                     onStart = {
                         durationMillis = toMillis(timerMinutes, timerSeconds)
@@ -308,27 +326,30 @@ private fun SetupScreen(
     timerSeconds: Int,
     rollbackMinutes: Int,
     rollbackSeconds: Int,
+    loopRest: Boolean,
     hasAudio: Boolean,
     onTimerMinutesChange: (Int) -> Unit,
     onTimerSecondsChange: (Int) -> Unit,
     onRollbackMinutesChange: (Int) -> Unit,
     onRollbackSecondsChange: (Int) -> Unit,
+    onLoopRestChange: (Boolean) -> Unit,
     onPickAudio: () -> Unit,
     onStart: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(
-        modifier = modifier.padding(top = 52.dp),
+        modifier = modifier
+            .verticalScroll(rememberScrollState())
+            .padding(start = 6.dp, top = 56.dp, end = 6.dp, bottom = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+        verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         Text(
             text = "Таймер",
             color = MaterialTheme.colorScheme.onBackground,
-            fontSize = 30.sp,
+            fontSize = 28.sp,
             fontWeight = FontWeight.Bold
         )
-        Spacer(modifier = Modifier.height(22.dp))
         TimeWheelRow(
             title = "Время",
             minutes = timerMinutes,
@@ -336,22 +357,38 @@ private fun SetupScreen(
             onMinutesChange = onTimerMinutesChange,
             onSecondsChange = onTimerSecondsChange
         )
-        Spacer(modifier = Modifier.height(26.dp))
         TimeWheelRow(
-            title = "Откат",
+            title = "Отдых",
             minutes = rollbackMinutes,
             seconds = rollbackSeconds,
             onMinutesChange = onRollbackMinutesChange,
             onSecondsChange = onRollbackSecondsChange
         )
-        Spacer(modifier = Modifier.height(28.dp))
+        Row(
+            modifier = Modifier
+                .widthIn(max = 360.dp)
+                .fillMaxWidth(),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Зациклить",
+                color = MaterialTheme.colorScheme.onBackground,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Switch(
+                checked = loopRest,
+                onCheckedChange = onLoopRestChange
+            )
+        }
         OutlinedButton(
             onClick = onPickAudio,
             shape = RoundedCornerShape(8.dp)
         ) {
             Text(if (hasAudio) "Аудио выбрано" else "Загрузить аудио")
         }
-        Spacer(modifier = Modifier.height(18.dp))
         Button(
             onClick = onStart,
             shape = RoundedCornerShape(8.dp),
@@ -374,17 +411,20 @@ private fun RunningScreen(
     modifier: Modifier = Modifier
 ) {
     Column(
-        modifier = modifier.padding(top = 44.dp),
+        modifier = modifier
+            .verticalScroll(rememberScrollState())
+            .padding(start = 6.dp, top = 56.dp, end = 6.dp, bottom = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+        verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
         CortisolGauge(
             progress = progress,
             displayMillis = displayMillis,
             isRollback = isRollback,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier
+                .widthIn(max = 460.dp)
+                .fillMaxWidth()
         )
-        Spacer(modifier = Modifier.height(28.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.Center,
@@ -427,7 +467,8 @@ private fun TimeWheelRow(
         )
         Spacer(modifier = Modifier.height(10.dp))
         Row(
-            horizontalArrangement = Arrangement.spacedBy(18.dp),
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(14.dp, Alignment.CenterHorizontally),
             verticalAlignment = Alignment.CenterVertically
         ) {
             WheelPicker(
@@ -456,27 +497,30 @@ private fun WheelPicker(
     val values = remember(range.first, range.last) { range.toList() }
     val selectedIndex = values.indexOf(value).coerceAtLeast(0)
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = selectedIndex)
+    val flingBehavior = rememberSnapFlingBehavior(lazyListState = listState)
     val highlightColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
     val textColor = MaterialTheme.colorScheme.onBackground
 
-    LaunchedEffect(value) {
-        val index = values.indexOf(value)
-        if (index >= 0 && index != listState.firstVisibleItemIndex) {
-            listState.animateScrollToItem(index)
-        }
-    }
-
     LaunchedEffect(listState, values) {
-        snapshotFlow { listState.firstVisibleItemIndex }
-            .collectLatest { index ->
-                values.getOrNull(index)?.let(onValueChange)
+        snapshotFlow {
+            listState.isScrollInProgress
+        }.collect { isScrolling ->
+            if (isScrolling) return@collect
+
+            val offset = listState.firstVisibleItemScrollOffset
+            val nearestIndex = (listState.firstVisibleItemIndex + if (offset >= 24) 1 else 0)
+                .coerceIn(values.indices)
+            if (!isScrolling && offset != 0) {
+                listState.animateScrollToItem(nearestIndex)
             }
+            values.getOrNull(nearestIndex)?.let(onValueChange)
+        }
     }
 
     Box(
         modifier = Modifier
-            .width(112.dp)
-            .height(172.dp)
+            .width(104.dp)
+            .height(148.dp)
             .clip(RoundedCornerShape(18.dp))
             .background(MaterialTheme.colorScheme.surface)
     ) {
@@ -484,28 +528,31 @@ private fun WheelPicker(
             modifier = Modifier
                 .align(Alignment.Center)
                 .fillMaxWidth()
-                .height(48.dp)
+                .height(44.dp)
                 .background(highlightColor)
         )
         LazyColumn(
             state = listState,
+            flingBehavior = flingBehavior,
             modifier = Modifier.fillMaxSize(),
             horizontalAlignment = Alignment.CenterHorizontally,
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 62.dp)
+            contentPadding = PaddingValues(vertical = 52.dp)
         ) {
-            items(values.size) { index ->
-                val item = values[index]
+            itemsIndexed(values) { _, item ->
                 val selected = item == value
                 Text(
                     text = "%02d $suffix".format(item),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(48.dp)
-                        .clickable { onValueChange(item) },
+                        .height(44.dp)
+                        .clickable {
+                            onValueChange(item)
+                        },
                     color = if (selected) MaterialTheme.colorScheme.primary else textColor.copy(alpha = 0.62f),
-                    fontSize = if (selected) 24.sp else 18.sp,
+                    fontSize = if (selected) 22.sp else 17.sp,
                     fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                    textAlign = TextAlign.Center
+                    textAlign = TextAlign.Center,
+                    lineHeight = 44.sp
                 )
             }
         }
@@ -632,7 +679,7 @@ private fun CortisolGauge(
                 fontWeight = FontWeight.Bold
             )
             Text(
-                text = if (isRollback) "ОТКАТ" else "CORTISOL",
+                text = if (isRollback) "ОТДЫХ" else "CORTISOL",
                 color = MaterialTheme.colorScheme.onBackground,
                 fontSize = 24.sp,
                 fontWeight = FontWeight.Black
